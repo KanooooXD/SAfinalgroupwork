@@ -6,11 +6,22 @@
 #include <vector>
 #include <cctype>
 #include <cstring>
+#include <sstream>
 
 using namespace std;
 
+// Simple logging helper for debugging/tracing. Controlled by DEBUG_LOG.
+static bool DEBUG_LOG = true;
+template<typename... Args>
+void LOGF(const std::string &tag, Args&&... args) {
+    if (!DEBUG_LOG) return;
+    std::ostringstream oss;
+    (oss << ... << args);
+    std::cerr << "[" << tag << "] " << oss.str() << std::endl;
+}
+
 // 简短说明：这是一个非常简化的未初始化变量检测 PoC。
-// 基于逐行文本分析（非 AST），用于教学和演示：
+// 基于逐行文本分析（非 AST），用于演示：
 // - 识别局部变量声明、赋值（将变量标记为已初始化）
 // - 识别对可能未初始化变量的读取并发出警告
 // 注意：该实现非常保守/简化，不能替代真正的静态分析器。
@@ -75,12 +86,15 @@ private:
         while (getline(file, line)) {
             lines.push_back(line);
         }
+        LOGF("readFile", "file=", filename, " lines=", (int)lines.size());
     }
     
     void processLine(const string& line, int lineNum) {
         // 预处理行（去注释、字符串等），然后根据内容判断是声明、赋值或读取
         string cleaned = preprocessLine(line);
         string trimmed = trim(cleaned);
+
+        LOGF("processLine", "line=", lineNum, " raw='", line, "' trimmed='", trimmed, "'");
 
         if (trimmed.empty() || trimmed[0] == '#') return;
 
@@ -167,6 +181,7 @@ private:
                 }
                 
                 if (vars.find(varName) == vars.end()) {
+                    LOGF("extractVariables", "decl var=", varName, " init=", init, " at=", lineNum, " pos=", (int)start);
                     vars[varName] = {varName, {currentFile, lineNum, (int)start}, init};
                 } else {
                     // update initialization status if redeclared/seen
@@ -202,6 +217,7 @@ private:
                 string varName = line.substr(start, varEnd - start + 1);
                 // 将等号左侧识别为被赋值的变量（非常简单的词法识别）
                 if (vars.find(varName) != vars.end()) {
+                    LOGF("detectAssignments", "assign var=", varName, " line=", lineNum);
                     vars[varName].initialized = true;
                 }
             }
@@ -230,6 +246,7 @@ private:
                     } else {
                         if (noisyMode) {
                             // noisy: warn for most non-assignment occurrences (may include false positives)
+                            LOGF("detectUses", "candidate use var=", varName, " pos=", (int)pos, " line=", lineNum, " noisy=1");
                             warnings.emplace_back(Location{currentFile, lineNum, (int)pos},
                                                   std::string("use of possibly uninitialized variable '") + varName + "'");
                         } else {
@@ -244,11 +261,13 @@ private:
                                     if (nc == '[' || nc == '(' || nc == '&' || nc == '.') {
                                         // non-read-use, skip
                                     } else {
+                                        LOGF("detectUses", "candidate use var=", varName, " pos=", (int)pos, " line=", lineNum, " noisy=0");
                                         warnings.emplace_back(Location{currentFile, lineNum, (int)pos},
                                                               std::string("use of possibly uninitialized variable '") + varName + "'");
                                     }
                                 } else {
                                     // end of line -> likely a use
+                                    LOGF("detectUses", "candidate use var=", varName, " pos=", (int)pos, " line=", lineNum, " noisy=0 eol");
                                     warnings.emplace_back(Location{currentFile, lineNum, (int)pos},
                                                           std::string("use of possibly uninitialized variable '") + varName + "'");
                                 }
@@ -265,6 +284,7 @@ private:
     
     void reportFindings() {
         for (const auto& w : warnings) {
+            LOGF("report", "warning: ", w.second, " at ", w.first.file, ":", w.first.line, ":", w.first.col);
             cout << w.first.file << ":" << w.first.line << ":" << w.first.col
                  << ": warning: " << w.second << endl;
             // print the source line and a caret indicating the column
